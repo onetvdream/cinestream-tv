@@ -14,12 +14,16 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -78,7 +82,7 @@ class UiItem(
     val resolveUrl: suspend () -> String?,
 )
 
-enum class Tab(val label: String) { LIVE("Live TV"), MOVIES("Movies"), SERIES("Series") }
+enum class Tab { LIVE, MOVIES, SERIES, SEARCH }
 
 private const val PREFS = "cinestream"
 
@@ -105,6 +109,7 @@ fun App() {
     var profiles by remember { mutableStateOf(loadProfiles(ctx)) }
     var activeProfile by remember { mutableStateOf(loadActiveProfile(ctx)) }
     var playUrl by remember { mutableStateOf<String?>(null) }
+    var seriesDetail by remember { mutableStateOf<Pair<Long, String>?>(null) }
 
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(BG)) {
@@ -121,8 +126,13 @@ fun App() {
                 else -> BrowseScreen(
                     account!!, s,
                     onPlay = { url -> playUrl = url },
+                    onOpenSeries = { id, title -> seriesDetail = id to title },
                     onSwitchProfile = { saveActiveProfile(ctx, null); activeProfile = null },
                 )
+            }
+            val acc = account
+            if (acc != null) seriesDetail?.let { (id, title) ->
+                SeriesDetailScreen(acc, s, id, title, onPlay = { url -> playUrl = url }, onBack = { seriesDetail = null })
             }
             playUrl?.let { url -> PlayerScreen(url) { playUrl = null } }
         }
@@ -301,16 +311,23 @@ fun TvField(label: String, value: String, password: Boolean = false, onChange: (
 // ---------------- Browse ----------------
 
 @Composable
-fun BrowseScreen(account: Account, s: Strings, onPlay: (String) -> Unit, onSwitchProfile: () -> Unit) {
+fun BrowseScreen(account: Account, s: Strings, onPlay: (String) -> Unit, onOpenSeries: (Long, String) -> Unit, onSwitchProfile: () -> Unit) {
     var tab by remember { mutableStateOf(Tab.LIVE) }
     var hero by remember { mutableStateOf<UiItem?>(null) }
     val cache = remember { mutableStateMapOf<Tab, List<Pair<String, List<UiItem>>>>() }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // Routes a tile/hero activation: series open a detail screen, others play.
+    val activate: (UiItem) -> Unit = { item ->
+        if (item.kind == ItemKind.SERIES && item.numericId != null) onOpenSeries(item.numericId, item.title)
+        else scope.launch { item.resolveUrl()?.let(onPlay) }
+    }
 
     LaunchedEffect(tab) {
         hero = null
-        if (cache[tab] != null) return@LaunchedEffect
+        if (tab == Tab.SEARCH || cache[tab] != null) return@LaunchedEffect
         loading = true; error = null
         try {
             cache[tab] = withContext(Dispatchers.IO) { loadTab(account, tab) }
@@ -323,9 +340,10 @@ fun BrowseScreen(account: Account, s: Strings, onPlay: (String) -> Unit, onSwitc
         NavRail(s, tab, onSelect = { tab = it }, onSwitchProfile = onSwitchProfile)
         Box(Modifier.weight(1f).fillMaxHeight()) {
             when {
-                loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { Text("Loading…", color = Color.White) }
+                tab == Tab.SEARCH -> SearchScreen(account, s, onActivate = activate)
+                loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { Text(s.t("loading"), color = Color.White) }
                 error != null -> Box(Modifier.fillMaxSize(), Alignment.Center) { Text(error!!, color = RED) }
-                else -> ContentColumn(account = account, rows = cache[tab].orEmpty(), hero = hero, onFocusItem = { hero = it }, onPlay = onPlay)
+                else -> ContentColumn(account = account, rows = cache[tab].orEmpty(), hero = hero, onFocusItem = { hero = it }, onActivate = activate)
             }
         }
     }
@@ -341,8 +359,8 @@ fun NavRail(s: Strings, current: Tab, onSelect: (Tab) -> Unit, onSwitchProfile: 
             Text("CineStream", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
         }
         Tab.entries.forEach { t ->
-            val icon = when (t) { Tab.LIVE -> Icons.Filled.LiveTv; Tab.MOVIES -> Icons.Filled.Movie; Tab.SERIES -> Icons.Filled.Tv }
-            val label = when (t) { Tab.LIVE -> s.t("live"); Tab.MOVIES -> s.t("movies"); Tab.SERIES -> s.t("series") }
+            val icon = when (t) { Tab.LIVE -> Icons.Filled.LiveTv; Tab.MOVIES -> Icons.Filled.Movie; Tab.SERIES -> Icons.Filled.Tv; Tab.SEARCH -> Icons.Filled.Search }
+            val label = when (t) { Tab.LIVE -> s.t("live"); Tab.MOVIES -> s.t("movies"); Tab.SERIES -> s.t("series"); Tab.SEARCH -> s.t("search") }
             Card(
                 onClick = { onSelect(t) },
                 modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) onSelect(t) },
@@ -368,20 +386,20 @@ fun ContentColumn(
     rows: List<Pair<String, List<UiItem>>>,
     hero: UiItem?,
     onFocusItem: (UiItem) -> Unit,
-    onPlay: (String) -> Unit,
+    onActivate: (UiItem) -> Unit,
 ) {
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        item { Hero(account, hero, onPlay) }
+        item { Hero(account, hero, onActivate) }
         items(rows) { (title, list) ->
             Column(Modifier.padding(start = 28.dp)) {
                 Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(end = 28.dp)) {
-                    items(list) { tile -> Tile(tile, onFocusItem, onPlay) }
+                    items(list) { tile -> Tile(tile, onFocusItem, onActivate) }
                 }
             }
         }
@@ -389,8 +407,7 @@ fun ContentColumn(
 }
 
 @Composable
-fun Hero(account: Account, item: UiItem?, onPlay: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
+fun Hero(account: Account, item: UiItem?, onActivate: (UiItem) -> Unit) {
     // Fetch rich details (plot, year, genre, wide backdrop) for the focused
     // movie/series — debounced so fast scrolling doesn't spam the API.
     var details by remember(item?.id) { mutableStateOf<InfoBlock?>(null) }
@@ -431,7 +448,7 @@ fun Hero(account: Account, item: UiItem?, onPlay: (String) -> Unit) {
                 Text(it, color = Color(0xFFCCCCCC), fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.height(12.dp))
-            Card(onClick = { item?.let { i -> scope.launch { i.resolveUrl()?.let(onPlay) } } }) {
+            Card(onClick = { item?.let(onActivate) }) {
                 Row(Modifier.padding(horizontal = 22.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
@@ -443,12 +460,11 @@ fun Hero(account: Account, item: UiItem?, onPlay: (String) -> Unit) {
 }
 
 @Composable
-fun Tile(item: UiItem, onFocusItem: (UiItem) -> Unit, onPlay: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
+fun Tile(item: UiItem, onFocusItem: (UiItem) -> Unit, onActivate: (UiItem) -> Unit) {
     val w = if (item.poster) 130.dp else 170.dp
     val h = if (item.poster) 195.dp else 100.dp
     Card(
-        onClick = { scope.launch { item.resolveUrl()?.let(onPlay) } },
+        onClick = { onActivate(item) },
         modifier = Modifier.width(w).onFocusChanged { if (it.isFocused) onFocusItem(item) },
         border = CardDefaults.border(focusedBorder = Border(androidx.compose.foundation.BorderStroke(3.dp, Color.White))),
     ) {
@@ -516,6 +532,104 @@ private suspend fun loadTab(account: Account, tab: Tab): List<Pair<String, List<
             }
         }
     }
+}
+
+// ---------------- Series detail (season / episode picker) ----------------
+
+@Composable
+fun SeriesDetailScreen(account: Account, s: Strings, seriesId: Long, title: String, onPlay: (String) -> Unit, onBack: () -> Unit) {
+    var info by remember(seriesId) { mutableStateOf<SeriesInfo?>(null) }
+    var loading by remember(seriesId) { mutableStateOf(true) }
+    BackHandler { onBack() }
+    LaunchedEffect(seriesId) {
+        loading = true
+        info = withContext(Dispatchers.IO) {
+            try { account.api().seriesInfo(account.username, account.password, seriesId) } catch (e: Exception) { null }
+        }
+        loading = false
+    }
+    Box(Modifier.fillMaxSize().background(BG)) {
+        if (loading) {
+            Box(Modifier.fillMaxSize(), Alignment.Center) { Text(s.t("loading"), color = Color.White) }
+        } else {
+            val bySeason = info?.episodes ?: emptyMap()
+            val seasons = bySeason.keys.sortedBy { it.toIntOrNull() ?: 0 }
+            LazyColumn(contentPadding = PaddingValues(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                item {
+                    Column {
+                        Text(title, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold)
+                        info?.info?.plot?.takeIf { it.isNotBlank() }?.let {
+                            Spacer(Modifier.height(8.dp))
+                            Text(it, color = Color(0xFFBBBBBB), fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.7f))
+                        }
+                    }
+                }
+                seasons.forEach { season ->
+                    item {
+                        Column {
+                            Text("${s.t("season")} $season", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(8.dp))
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                items(bySeason[season].orEmpty()) { ep ->
+                                    EpisodeCard(ep) { ep.id?.let { onPlay(account.episodeUrl(it, ep.ext)) } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EpisodeCard(ep: Episode, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.width(230.dp)) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).background(RED, RoundedCornerShape(8.dp)), Alignment.Center) {
+                Text("${ep.num ?: ""}", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(ep.title ?: "Episode ${ep.num ?: ""}", color = Color.White, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+// ---------------- Search ----------------
+
+@Composable
+fun SearchScreen(account: Account, s: Strings, onActivate: (UiItem) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var index by remember { mutableStateOf<List<UiItem>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        index = withContext(Dispatchers.IO) { try { loadSearchIndex(account) } catch (e: Exception) { emptyList() } }
+        loading = false
+    }
+    val results = remember(query, index) {
+        val q = query.trim()
+        if (q.length < 2) emptyList() else index.filter { it.title.contains(q, ignoreCase = true) }.take(90)
+    }
+    Column(Modifier.fillMaxSize().padding(28.dp)) {
+        TvField(s.t("searchHint"), query) { query = it }
+        Spacer(Modifier.height(16.dp))
+        when {
+            loading -> Text(s.t("loading"), color = Color(0xFF999999))
+            results.isEmpty() && query.trim().length >= 2 -> Text("—", color = Color(0xFF999999))
+            else -> LazyVerticalGrid(columns = GridCells.Adaptive(130.dp), modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                gridItems(results) { tile -> Tile(tile, {}, onActivate) }
+            }
+        }
+    }
+}
+
+private suspend fun loadSearchIndex(account: Account): List<UiItem> {
+    val api = account.api(); val u = account.username; val p = account.password
+    val out = ArrayList<UiItem>()
+    try { api.vodStreams(u, p).forEach { s -> out += UiItem(s.streamId.toString(), s.name ?: "", s.streamIcon, true, ItemKind.MOVIE, s.streamId, s.rating) { s.streamId?.let { account.vodUrl(it, s.ext) } } } } catch (e: Exception) {}
+    try { api.series(u, p).forEach { s -> out += UiItem(s.seriesId.toString(), s.name ?: "", s.cover, true, ItemKind.SERIES, s.seriesId, s.rating) { null } } } catch (e: Exception) {}
+    try { api.liveStreams(u, p).forEach { s -> out += UiItem(s.streamId.toString(), s.name ?: "", s.streamIcon, false, ItemKind.LIVE, s.streamId) { s.streamId?.let { account.liveUrl(it) } } } } catch (e: Exception) {}
+    return out
 }
 
 // ---------------- Player ----------------

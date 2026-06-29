@@ -18,6 +18,7 @@ private val STRINGS: Map<String, Map<String, String>> = mapOf(
         "done" to "Done", "live" to "Live TV", "movies" to "Movies", "series" to "Series",
         "play" to "Play", "loading" to "Loading…", "name" to "Name", "save" to "Save", "cancel" to "Cancel",
         "pressOk" to "Press OK to play", "switchPlaylist" to "Switch Playlist",
+        "search" to "Search", "searchHint" to "Type to search…", "episodes" to "Episodes", "season" to "Season",
     ),
     "fr" to mapOf(
         "signIn" to "Connexion avec Xtream Codes", "server" to "URL du serveur", "username" to "Nom d'utilisateur",
