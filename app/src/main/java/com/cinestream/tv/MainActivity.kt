@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+enum class ItemKind { LIVE, MOVIE, SERIES }
+
 // A unified tile shown in the rows. resolveUrl() returns the playable URL
 // (series resolves its first episode lazily).
 class UiItem(
@@ -68,6 +70,8 @@ class UiItem(
     val title: String,
     val image: String?,
     val poster: Boolean,
+    val kind: ItemKind,
+    val numericId: Long?,
     val rating: String? = null,
     val resolveUrl: suspend () -> String?,
 )
@@ -204,7 +208,7 @@ fun BrowseScreen(account: Account, onPlay: (String) -> Unit) {
             when {
                 loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { Text("Loading…", color = Color.White) }
                 error != null -> Box(Modifier.fillMaxSize(), Alignment.Center) { Text(error!!, color = RED) }
-                else -> ContentColumn(rows = cache[tab].orEmpty(), hero = hero, onFocusItem = { hero = it }, onPlay = onPlay)
+                else -> ContentColumn(account = account, rows = cache[tab].orEmpty(), hero = hero, onFocusItem = { hero = it }, onPlay = onPlay)
             }
         }
     }
@@ -238,6 +242,7 @@ fun NavRail(current: Tab, onSelect: (Tab) -> Unit) {
 
 @Composable
 fun ContentColumn(
+    account: Account,
     rows: List<Pair<String, List<UiItem>>>,
     hero: UiItem?,
     onFocusItem: (UiItem) -> Unit,
@@ -248,7 +253,7 @@ fun ContentColumn(
         contentPadding = PaddingValues(bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        item { Hero(hero) }
+        item { Hero(account, hero, onPlay) }
         items(rows) { (title, list) ->
             Column(Modifier.padding(start = 28.dp)) {
                 Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
@@ -262,22 +267,55 @@ fun ContentColumn(
 }
 
 @Composable
-fun Hero(item: UiItem?) {
-    Box(Modifier.fillMaxWidth().height(300.dp)) {
-        if (item?.image != null) {
-            AsyncImage(model = item.image, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+fun Hero(account: Account, item: UiItem?, onPlay: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    // Fetch rich details (plot, year, genre, wide backdrop) for the focused
+    // movie/series — debounced so fast scrolling doesn't spam the API.
+    var details by remember(item?.id) { mutableStateOf<InfoBlock?>(null) }
+    LaunchedEffect(item?.id) {
+        details = null
+        val it = item ?: return@LaunchedEffect
+        if (it.kind == ItemKind.LIVE || it.numericId == null) return@LaunchedEffect
+        kotlinx.coroutines.delay(300)
+        details = withContext(Dispatchers.IO) {
+            try {
+                if (it.kind == ItemKind.MOVIE) account.api().vodInfo(account.username, account.password, it.numericId).info
+                else account.api().seriesInfo(account.username, account.password, it.numericId).info
+            } catch (e: Exception) { null }
+        }
+    }
+
+    val bg = details?.wideImage ?: item?.image
+    val rating = (details?.rating?.takeIf { it.isNotBlank() && it != "0" }) ?: item?.rating?.takeIf { it.isNotBlank() && it != "0" }
+    val meta = listOfNotNull(details?.anyYear, details?.genre?.split(",", "/")?.firstOrNull()?.trim()?.takeIf { it.isNotBlank() }).joinToString("  •  ")
+
+    Box(Modifier.fillMaxWidth().height(330.dp)) {
+        if (bg != null) {
+            AsyncImage(model = bg, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         } else {
             Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1A)))
         }
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, BG))))
-        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(BG, Color.Transparent))))
-        Column(Modifier.align(Alignment.BottomStart).padding(28.dp).fillMaxWidth(0.6f)) {
-            Text(item?.title ?: "CineStream", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            item?.rating?.takeIf { it.isNotBlank() && it != "0" }?.let {
-                Spacer(Modifier.height(6.dp)); Text("★ $it", color = Color(0xFFFACC15), fontSize = 15.sp)
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(BG, BG.copy(alpha = 0.2f), Color.Transparent))))
+        Column(Modifier.align(Alignment.BottomStart).padding(28.dp).fillMaxWidth(0.62f)) {
+            Text(item?.title ?: "CineStream", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                rating?.let { Text("★ $it", color = Color(0xFFFACC15), fontSize = 14.sp); Spacer(Modifier.width(12.dp)) }
+                if (meta.isNotBlank()) Text(meta, color = Color(0xFFCCCCCC), fontSize = 14.sp)
             }
-            Spacer(Modifier.height(8.dp))
-            Text("Press OK to play", color = Color(0xFFBBBBBB), fontSize = 13.sp)
+            details?.plot?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = Color(0xFFCCCCCC), fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.height(12.dp))
+            Card(onClick = { item?.let { i -> scope.launch { i.resolveUrl()?.let(onPlay) } } }) {
+                Row(Modifier.padding(horizontal = 22.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Play", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }
@@ -318,7 +356,7 @@ private suspend fun loadTab(account: Account, tab: Tab): List<Pair<String, List<
             cats.mapNotNull { c ->
                 val list = byCat[c.categoryId].orEmpty().take(40)
                 if (list.isEmpty()) null else (c.categoryName ?: "Live") to list.map { s ->
-                    UiItem(s.streamId.toString(), s.name ?: "", s.streamIcon, poster = false) {
+                    UiItem(s.streamId.toString(), s.name ?: "", s.streamIcon, poster = false, kind = ItemKind.LIVE, numericId = s.streamId) {
                         s.streamId?.let { account.liveUrl(it) }
                     }
                 }
@@ -331,7 +369,7 @@ private suspend fun loadTab(account: Account, tab: Tab): List<Pair<String, List<
             cats.mapNotNull { c ->
                 val list = byCat[c.categoryId].orEmpty().take(40)
                 if (list.isEmpty()) null else (c.categoryName ?: "Movies") to list.map { s ->
-                    UiItem(s.streamId.toString(), s.name ?: "", s.streamIcon, poster = true, rating = s.rating) {
+                    UiItem(s.streamId.toString(), s.name ?: "", s.streamIcon, poster = true, kind = ItemKind.MOVIE, numericId = s.streamId, rating = s.rating) {
                         s.streamId?.let { account.vodUrl(it, s.ext) }
                     }
                 }
@@ -344,7 +382,7 @@ private suspend fun loadTab(account: Account, tab: Tab): List<Pair<String, List<
             cats.mapNotNull { c ->
                 val items = byCat[c.categoryId].orEmpty().take(40)
                 if (items.isEmpty()) null else (c.categoryName ?: "Series") to items.map { s ->
-                    UiItem(s.seriesId.toString(), s.name ?: "", s.cover, poster = true, rating = s.rating) {
+                    UiItem(s.seriesId.toString(), s.name ?: "", s.cover, poster = true, kind = ItemKind.SERIES, numericId = s.seriesId, rating = s.rating) {
                         val id = s.seriesId
                         if (id == null) null else {
                             val info = try { api.seriesInfo(u, p, id) } catch (e: Exception) { null }

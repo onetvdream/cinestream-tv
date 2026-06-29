@@ -45,7 +45,28 @@ data class Episode(
 
 data class SeriesInfo(
     @SerializedName("episodes") val episodes: Map<String, List<Episode>>? = null,
+    @SerializedName("info") val info: InfoBlock? = null,
 )
+
+data class VodInfoResponse(
+    @SerializedName("info") val info: InfoBlock? = null,
+)
+
+// Shared "info" block returned by get_vod_info / get_series_info.
+data class InfoBlock(
+    @SerializedName("plot") val plot: String? = null,
+    @SerializedName("genre") val genre: String? = null,
+    @SerializedName("rating") val rating: String? = null,
+    @SerializedName("releasedate") val releaseDate: String? = null,
+    @SerializedName("releaseDate") val releaseDate2: String? = null,
+    @SerializedName("year") val year: String? = null,
+    @SerializedName("cover_big") val coverBig: String? = null,
+    @SerializedName("backdrop_path") val backdrop: List<String>? = null,
+    @SerializedName("youtube_trailer") val trailer: String? = null,
+) {
+    val anyYear: String? get() = (year ?: releaseDate ?: releaseDate2)?.let { Regex("(19|20)\\d{2}").find(it)?.value }
+    val wideImage: String? get() = backdrop?.firstOrNull()
+}
 
 interface XtreamApi {
     @GET("player_api.php")
@@ -68,6 +89,9 @@ interface XtreamApi {
 
     @GET("player_api.php")
     suspend fun seriesInfo(@Query("username") u: String, @Query("password") p: String, @Query("series_id") id: Long, @Query("action") a: String = "get_series_info"): SeriesInfo
+
+    @GET("player_api.php")
+    suspend fun vodInfo(@Query("username") u: String, @Query("password") p: String, @Query("vod_id") id: Long, @Query("action") a: String = "get_vod_info"): VodInfoResponse
 }
 
 // Holds the user's credentials and builds the API + stream URLs.
