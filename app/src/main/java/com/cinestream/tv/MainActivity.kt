@@ -531,6 +531,7 @@ private suspend fun loadTab(account: Account, tab: Tab): List<Pair<String, List<
                 }
             }
         }
+        Tab.SEARCH -> emptyList()
     }
 }
 
