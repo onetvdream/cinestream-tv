@@ -24,7 +24,9 @@ import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -96,18 +98,50 @@ private fun saveAccount(ctx: Context, a: Account) {
 @Composable
 fun App() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    var lang by remember { mutableStateOf(loadLang(ctx)) }
+    val s = remember(lang) { Strings(lang) }
+    var showSplash by remember { mutableStateOf(true) }
     var account by remember { mutableStateOf(loadAccount(ctx)) }
+    var profiles by remember { mutableStateOf(loadProfiles(ctx)) }
+    var activeProfile by remember { mutableStateOf(loadActiveProfile(ctx)) }
     var playUrl by remember { mutableStateOf<String?>(null) }
 
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(BG)) {
-            val acc = account
-            if (acc == null) {
-                LoginScreen { a -> saveAccount(ctx, a); account = a }
-            } else {
-                BrowseScreen(acc, onPlay = { url -> playUrl = url })
+            when {
+                showSplash -> Splash { showSplash = false }
+                account == null -> LoginScreen(s, lang, onLang = { lang = it; saveLang(ctx, it) }) { a ->
+                    saveAccount(ctx, a); account = a
+                }
+                activeProfile == null -> ProfilesScreen(
+                    s, profiles,
+                    onSelect = { id -> saveActiveProfile(ctx, id); activeProfile = id },
+                    onProfilesChange = { list -> profiles = list; saveProfiles(ctx, list) },
+                )
+                else -> BrowseScreen(
+                    account!!, s,
+                    onPlay = { url -> playUrl = url },
+                    onSwitchProfile = { saveActiveProfile(ctx, null); activeProfile = null },
+                )
             }
             playUrl?.let { url -> PlayerScreen(url) { playUrl = null } }
+        }
+    }
+}
+
+@Composable
+fun Splash(onDone: () -> Unit) {
+    var shown by remember { mutableStateOf(false) }
+    val scale by androidx.compose.animation.core.animateFloatAsState(if (shown) 1f else 0.6f, androidx.compose.animation.core.tween(700), label = "scale")
+    val alpha by androidx.compose.animation.core.animateFloatAsState(if (shown) 1f else 0f, androidx.compose.animation.core.tween(700), label = "alpha")
+    LaunchedEffect(Unit) { shown = true; kotlinx.coroutines.delay(1800); onDone() }
+    Box(Modifier.fillMaxSize().background(BG), contentAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.scale(scale).alpha(alpha)) {
+            Box(Modifier.size(72.dp).background(RED, RoundedCornerShape(18.dp)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(44.dp))
+            }
+            Spacer(Modifier.width(16.dp))
+            Text("CineStream", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold)
         }
     }
 }
@@ -115,46 +149,129 @@ fun App() {
 // ---------------- Login ----------------
 
 @Composable
-fun LoginScreen(onConnected: (Account) -> Unit) {
+fun LoginScreen(s: Strings, lang: String, onLang: (String) -> Unit, onConnected: (Account) -> Unit) {
     var server by remember { mutableStateOf("http://") }
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
 
-    Row(Modifier.fillMaxSize()) {
-        Column(
-            Modifier.weight(1f).fillMaxHeight().padding(48.dp),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Box(Modifier.size(72.dp).background(RED, RoundedCornerShape(18.dp)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(44.dp))
+    Box(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.weight(1f).fillMaxHeight().padding(48.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(Modifier.size(80.dp).background(RED, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(48.dp))
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("CineStream", fontSize = 44.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
             }
-            Spacer(Modifier.height(16.dp))
-            Text("CineStream", fontSize = 44.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-            Text("Native TV", fontSize = 16.sp, color = Color(0xFF999999))
-        }
-        Column(
-            Modifier.weight(1f).fillMaxHeight().padding(48.dp),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text("Sign in (Xtream Codes)", fontSize = 20.sp, color = Color.White)
-            Spacer(Modifier.height(16.dp))
-            TvField("Server URL", server) { server = it }
-            Spacer(Modifier.height(12.dp))
-            TvField("Username", user) { user = it }
-            Spacer(Modifier.height(12.dp))
-            TvField("Password", pass, password = true) { pass = it }
-            Spacer(Modifier.height(16.dp))
-            error?.let { Text(it, color = RED); Spacer(Modifier.height(8.dp)) }
-            Card(onClick = {
-                var s = server.trim()
-                if (!s.startsWith("http://") && !s.startsWith("https://")) s = "http://$s"
-                if (s.length < 10 || user.isBlank() || pass.isBlank()) { error = "Please fill in all fields"; return@Card }
-                onConnected(Account(s, user.trim(), pass.trim()))
-            }) {
-                Text("Connect", color = Color.White, modifier = Modifier.padding(horizontal = 28.dp, vertical = 14.dp))
+            Column(
+                Modifier.weight(1f).fillMaxHeight().padding(48.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(s.t("signIn"), fontSize = 20.sp, color = Color.White)
+                Spacer(Modifier.height(16.dp))
+                TvField(s.t("server"), server) { server = it }
+                Spacer(Modifier.height(12.dp))
+                TvField(s.t("username"), user) { user = it }
+                Spacer(Modifier.height(12.dp))
+                TvField(s.t("password"), pass, password = true) { pass = it }
+                Spacer(Modifier.height(16.dp))
+                error?.let { Text(it, color = RED); Spacer(Modifier.height(8.dp)) }
+                Card(onClick = {
+                    var srv = server.trim()
+                    if (!srv.startsWith("http://") && !srv.startsWith("https://")) srv = "http://$srv"
+                    if (srv.length < 10 || user.isBlank() || pass.isBlank()) { error = s.t("fillAll"); return@Card }
+                    onConnected(Account(srv, user.trim(), pass.trim()))
+                }) {
+                    Text(s.t("connect"), color = Color.White, modifier = Modifier.padding(horizontal = 28.dp, vertical = 14.dp))
+                }
             }
         }
+        Box(Modifier.align(Alignment.TopEnd).padding(24.dp)) { LanguagePicker(lang, onLang) }
+    }
+}
+
+@Composable
+fun LanguagePicker(lang: String, onLang: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val current = LANGUAGES.firstOrNull { it.first == lang } ?: LANGUAGES[0]
+    Column(horizontalAlignment = Alignment.End) {
+        Card(onClick = { open = !open }, colors = CardDefaults.colors(containerColor = Color(0xFF222222))) {
+            Text("🌐  ${current.second}", color = Color.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+        }
+        if (open) {
+            Spacer(Modifier.height(6.dp))
+            Column(Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(10.dp)).padding(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LANGUAGES.forEach { (code, name) ->
+                    Card(onClick = { onLang(code); open = false }, colors = CardDefaults.colors(containerColor = if (code == lang) RED else Color(0xFF262626))) {
+                        Text(name, color = Color.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth())
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfilesScreen(s: Strings, profiles: List<Profile>, onSelect: (String) -> Unit, onProfilesChange: (List<Profile>) -> Unit) {
+    var adding by remember { mutableStateOf(profiles.isEmpty()) }
+    var name by remember { mutableStateOf("") }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (adding) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(s.t("addProfile"), color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(20.dp))
+                TvField(s.t("name"), name) { name = it }
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Card(onClick = {
+                        if (name.isBlank()) return@Card
+                        val p = Profile(System.currentTimeMillis().toString(), name.trim(), PROFILE_COLORS[profiles.size % PROFILE_COLORS.size])
+                        onProfilesChange(profiles + p); adding = false; name = ""
+                    }) { Text(s.t("save"), color = Color.White, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)) }
+                    if (profiles.isNotEmpty()) {
+                        Card(onClick = { adding = false; name = "" }, colors = CardDefaults.colors(containerColor = Color(0xFF262626))) {
+                            Text(s.t("cancel"), color = Color.White, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
+                        }
+                    }
+                }
+            }
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(s.t("whosWatching"), color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(36.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(24.dp), contentPadding = PaddingValues(horizontal = 24.dp)) {
+                    items(profiles) { p -> ProfileAvatar(p) { onSelect(p.id) } }
+                    item {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Card(onClick = { adding = true }, modifier = Modifier.size(120.dp), colors = CardDefaults.colors(containerColor = Color(0xFF262626))) {
+                                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("+", color = Color.White, fontSize = 48.sp) }
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            Text(s.t("addProfile"), color = Color(0xFF999999), fontSize = 15.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfileAvatar(p: Profile, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Card(onClick = onClick, modifier = Modifier.size(120.dp), colors = CardDefaults.colors(containerColor = Color(p.color))) {
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Text(p.name.take(1).uppercase(), color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(p.name, color = Color.White, fontSize = 16.sp)
     }
 }
 
@@ -184,7 +301,7 @@ fun TvField(label: String, value: String, password: Boolean = false, onChange: (
 // ---------------- Browse ----------------
 
 @Composable
-fun BrowseScreen(account: Account, onPlay: (String) -> Unit) {
+fun BrowseScreen(account: Account, s: Strings, onPlay: (String) -> Unit, onSwitchProfile: () -> Unit) {
     var tab by remember { mutableStateOf(Tab.LIVE) }
     var hero by remember { mutableStateOf<UiItem?>(null) }
     val cache = remember { mutableStateMapOf<Tab, List<Pair<String, List<UiItem>>>>() }
@@ -203,7 +320,7 @@ fun BrowseScreen(account: Account, onPlay: (String) -> Unit) {
     }
 
     Row(Modifier.fillMaxSize()) {
-        NavRail(tab) { tab = it }
+        NavRail(s, tab, onSelect = { tab = it }, onSwitchProfile = onSwitchProfile)
         Box(Modifier.weight(1f).fillMaxHeight()) {
             when {
                 loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { Text("Loading…", color = Color.White) }
@@ -215,9 +332,9 @@ fun BrowseScreen(account: Account, onPlay: (String) -> Unit) {
 }
 
 @Composable
-fun NavRail(current: Tab, onSelect: (Tab) -> Unit) {
+fun NavRail(s: Strings, current: Tab, onSelect: (Tab) -> Unit, onSwitchProfile: () -> Unit) {
     Column(
-        Modifier.width(190.dp).fillMaxHeight().background(Color(0xFF161616)).padding(16.dp),
+        Modifier.width(200.dp).fillMaxHeight().background(Color(0xFF161616)).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(Modifier.padding(start = 6.dp, bottom = 18.dp)) {
@@ -225,6 +342,7 @@ fun NavRail(current: Tab, onSelect: (Tab) -> Unit) {
         }
         Tab.entries.forEach { t ->
             val icon = when (t) { Tab.LIVE -> Icons.Filled.LiveTv; Tab.MOVIES -> Icons.Filled.Movie; Tab.SERIES -> Icons.Filled.Tv }
+            val label = when (t) { Tab.LIVE -> s.t("live"); Tab.MOVIES -> s.t("movies"); Tab.SERIES -> s.t("series") }
             Card(
                 onClick = { onSelect(t) },
                 modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) onSelect(t) },
@@ -233,9 +351,13 @@ fun NavRail(current: Tab, onSelect: (Tab) -> Unit) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(10.dp))
-                    Text(t.label, color = Color.White, fontSize = 15.sp)
+                    Text(label, color = Color.White, fontSize = 15.sp)
                 }
             }
+        }
+        Spacer(Modifier.weight(1f))
+        Card(onClick = onSwitchProfile, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.colors(containerColor = Color(0xFF222222))) {
+            Text(s.t("switchPlaylist"), color = Color(0xFFBBBBBB), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp))
         }
     }
 }
